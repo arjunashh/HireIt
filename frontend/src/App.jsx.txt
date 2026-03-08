@@ -1,0 +1,944 @@
+/**
+ * App.jsx — AI Interview Intelligence Copilot
+ * All screens in one file to eliminate cross-component callback issues.
+ */
+
+import { useState, useEffect, useRef } from "react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API helpers
+// ─────────────────────────────────────────────────────────────────────────────
+async function apiPost(path, body, isForm = false) {
+  const res = await fetch("/api" + path, {
+    method: "POST",
+    ...(isForm
+      ? { body }
+      : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "Request failed");
+  return data;
+}
+
+const API = {
+  uploadResume: (file) => { const fd = new FormData(); fd.append("file", file); return apiPost("/resume/upload", fd, true); },
+  parseResume:  (text) => apiPost("/resume/parse", { text }),
+  parseJD:      (text) => apiPost("/jd/parse", { text }),
+  startSession: (p)    => apiPost("/session/start", p),
+  analyzeChunk: (p)    => apiPost("/session/chunk", p),
+  genReport:    (sid)  => apiPost("/session/report", { session_id: sid }),
+  factCheck:    (claim, resume_parsed) => apiPost("/factcheck", { claim, resume_parsed }),
+  createZoom:   (p)    => apiPost("/zoom/create-meeting", p),
+  zoomSig:      (mn, role) => apiPost("/zoom/sdk-signature", { meeting_number: mn, role }),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tiny UI primitives
+// ─────────────────────────────────────────────────────────────────────────────
+function Spinner() {
+  return <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #444", borderTopColor: "#7c6dff", borderRadius: "50%", animation: "spin .6s linear infinite" }} />;
+}
+
+function Btn({ children, onClick, disabled, variant = "primary", style = {} }) {
+  const bg = { primary: "#7c6dff", success: "#00e5b0", danger: "#ff4566", ghost: "transparent" }[variant];
+  const color = variant === "success" ? "#000" : variant === "ghost" ? "#8b9abb" : "#fff";
+  const border = variant === "ghost" ? "1px solid #252a3d" : "none";
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{ background: bg, color, border, borderRadius: 10, padding: "10px 20px", fontSize: 14, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "center", ...style }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Card({ children, style = {} }) {
+  return <div style={{ background: "#0f1120", border: "1px solid #252a3d", borderRadius: 12, padding: 20, ...style }}>{children}</div>;
+}
+
+function AlertBox({ type = "info", children }) {
+  const c = { info: ["#7c6dff10", "#7c6dff40", "#a89fff"], warn: ["#ffb02010", "#ffb02040", "#ffb020"], danger: ["#ff456610", "#ff456640", "#ff4566"], success: ["#00e5b010", "#00e5b040", "#00e5b0"] }[type] || ["#7c6dff10", "#7c6dff40", "#a89fff"];
+  return <div style={{ background: c[0], border: `1px solid ${c[1]}`, color: c[2], borderRadius: 10, padding: "11px 15px", fontSize: 13 }}>{children}</div>;
+}
+
+function ScoreBar({ label, score, max = 10 }) {
+  const pct = Math.round((score / max) * 100);
+  const col = pct >= 70 ? "#00e5b0" : pct >= 40 ? "#ffb020" : "#ff4566";
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+        <span>{label}</span><span style={{ color: col, fontWeight: 700 }}>{score}/{max}</span>
+      </div>
+      <div style={{ background: "#1e2235", borderRadius: 4, height: 6 }}>
+        <div style={{ width: `${pct}%`, height: 6, borderRadius: 4, background: col, transition: "width .4s" }} />
+      </div>
+    </div>
+  );
+}
+
+function Label({ children }) {
+  return <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "#6b7299", marginBottom: 8 }}>{children}</div>;
+}
+
+function Tag({ children, color = "#7c6dff" }) {
+  return <span style={{ display: "inline-block", background: color + "18", border: `1px solid ${color}40`, borderRadius: 20, padding: "2px 10px", fontSize: 12, color, margin: 3 }}>{children}</span>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCREEN: Role Select
+// ─────────────────────────────────────────────────────────────────────────────
+function ScreenRole({ onSelect }) {
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ textAlign: "center", marginBottom: 48 }}>
+        <div style={{ fontSize: 52, marginBottom: 12 }}>🧠</div>
+        <h1 style={{ fontSize: 32, fontWeight: 800, background: "linear-gradient(135deg,#7c6dff,#00e5b0)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", marginBottom: 8 }}>AI Interview Intelligence</h1>
+        <p style={{ color: "#6b7299", fontSize: 16 }}>Real-time copilot for interviews</p>
+      </div>
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", justifyContent: "center" }}>
+        {[
+          { role: "candidate", icon: "👤", title: "Candidate", desc: "Upload your resume, speak your answers, and get real-time AI fact-checking against your resume.", color: "#7c6dff" },
+          { role: "interviewer", icon: "🎙️", title: "Interviewer", desc: "Upload candidate resume, parse JD, get live AI analysis, contradiction detection and follow-up suggestions.", color: "#00e5b0" },
+        ].map(({ role, icon, title, desc, color }) => (
+          <div key={role} onClick={() => onSelect(role)} style={{ background: "#0f1120", border: `2px solid ${color}30`, borderRadius: 18, padding: "32px 28px", maxWidth: 300, textAlign: "center", cursor: "pointer", transition: "all .2s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.transform = "translateY(-4px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = `${color}30`; e.currentTarget.style.transform = "translateY(0)"; }}>
+            <div style={{ fontSize: 44, marginBottom: 12 }}>{icon}</div>
+            <h2 style={{ fontSize: 22, fontWeight: 700, color, marginBottom: 10 }}>{title}</h2>
+            <p style={{ color: "#6b7299", fontSize: 14, lineHeight: 1.7, marginBottom: 20 }}>{desc}</p>
+            <Btn style={{ width: "100%", background: color, color: role === "interviewer" ? "#000" : "#fff" }}>Enter as {title}</Btn>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCREEN: Candidate Room
+// ─────────────────────────────────────────────────────────────────────────────
+function ScreenCandidate({ onBack }) {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const trackingRef = useRef(null);
+  const faceApiRef = useRef(false);
+
+  const [stage, setStage] = useState("setup"); // setup | interview
+  const [name, setName] = useState("");
+  const [resumeText, setResumeText] = useState("");
+  const [resumeParsed, setResumeParsed] = useState(null);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [stream, setStream] = useState(null);
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeErr, setAnalyzeErr] = useState(null);
+  const [log, setLog] = useState([]);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [eyeStatus, setEyeStatus] = useState("Not started");
+  const [gazeAlert, setGazeAlert] = useState(null);
+
+  function addLog(msg) {
+    setLog(prev => [{ t: new Date().toLocaleTimeString(), msg }, ...prev]);
+  }
+
+  // ── Resume upload ──
+  async function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setResumeLoading(true);
+    try {
+      const { text } = await API.uploadResume(file);
+      const { parsed } = await API.parseResume(text);
+      setResumeParsed(parsed);
+      setResumeText(text);
+    } catch (err) { alert("Upload failed: " + err.message); }
+    finally { setResumeLoading(false); }
+  }
+
+  async function handlePaste() {
+    if (!resumeText.trim()) return;
+    setResumeLoading(true);
+    try {
+      const { parsed } = await API.parseResume(resumeText);
+      setResumeParsed(parsed);
+    } catch (err) { alert("Parse failed: " + err.message); }
+    finally { setResumeLoading(false); }
+  }
+
+  // ── Start interview ──
+  async function startInterview() {
+    if (!name.trim() || !resumeParsed) return;
+    setStage("interview");
+    addLog("✅ Session started");
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      setStream(s);
+      if (videoRef.current) {
+        videoRef.current.srcObject = s;
+        videoRef.current.onloadedmetadata = () => {
+          if (canvasRef.current) {
+            canvasRef.current.width = videoRef.current.videoWidth || 640;
+            canvasRef.current.height = videoRef.current.videoHeight || 480;
+          }
+          startEyeTracking();
+        };
+      }
+    } catch { addLog("⚠️ Camera denied — eye tracking disabled"); }
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) { addLog("🚨 Tab switch detected"); setGazeAlert("Tab switch detected!"); setTimeout(() => setGazeAlert(null), 4000); }
+    });
+  }
+
+  // ── Eye tracking ──
+  async function startEyeTracking() {
+    setEyeStatus("Loading model...");
+    await new Promise(res => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js";
+      s.onload = res; s.onerror = res;
+      document.head.appendChild(s);
+    });
+    if (!window.faceapi) { setEyeStatus("Model unavailable"); return; }
+    try {
+      const MODEL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model";
+      await Promise.all([
+        window.faceapi.nets.tinyFaceDetector.loadFromUri(MODEL),
+        window.faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL),
+      ]);
+      faceApiRef.current = true;
+      setEyeStatus("Active ✓");
+    } catch { setEyeStatus("Model load failed"); return; }
+
+    trackingRef.current = setInterval(async () => {
+      if (!videoRef.current || !window.faceapi || !faceApiRef.current) return;
+      try {
+        const det = await window.faceapi.detectSingleFace(videoRef.current, new window.faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true);
+        const ctx = canvasRef.current?.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        if (!det) {
+          setFaceDetected(false);
+          setEyeStatus("No face detected");
+          addLog("👀 Face not visible");
+          setGazeAlert("Please face the camera.");
+          setTimeout(() => setGazeAlert(null), 4000);
+          return;
+        }
+        setFaceDetected(true);
+        const { x, y, width, height } = det.detection.box;
+        const sx = canvasRef.current.width / videoRef.current.videoWidth;
+        const sy = canvasRef.current.height / videoRef.current.videoHeight;
+        if (ctx) { ctx.strokeStyle = "#00e5b0"; ctx.lineWidth = 2; ctx.strokeRect(x * sx, y * sy, width * sx, height * sy); }
+        const le = det.landmarks.getLeftEye();
+        const re = det.landmarks.getRightEye();
+        if (ctx) {
+          ctx.fillStyle = "#7c6dff";
+          [...le, ...re].forEach(p => { ctx.beginPath(); ctx.arc(p.x * sx, p.y * sy, 2, 0, Math.PI * 2); ctx.fill(); });
+        }
+        const midX = ([...le, ...re].reduce((a, p) => a + p.x, 0)) / (le.length + re.length);
+        const gaze = (midX - (x + width / 2)) / width;
+        if (Math.abs(gaze) > 0.15) {
+          setEyeStatus(`Gaze: looking ${gaze > 0 ? "right" : "left"}`);
+          addLog(`👀 Gaze deviation (${gaze > 0 ? "right" : "left"})`);
+          setGazeAlert("Look straight at the camera.");
+          setTimeout(() => setGazeAlert(null), 4000);
+        } else {
+          setEyeStatus("Face & gaze OK ✓");
+        }
+      } catch {}
+    }, 1500);
+  }
+
+  // ── Mic ──
+  function toggleMic() {
+    if (listening) { recognitionRef.current?.stop(); setListening(false); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { addLog("Speech recognition not supported"); return; }
+    const r = new SR();
+    r.continuous = true; r.interimResults = true; r.lang = "en-US";
+    r.onresult = e => { let t = ""; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; setTranscript(t); };
+    r.onend = () => setListening(false);
+    r.start(); recognitionRef.current = r; setListening(true);
+    addLog("🎙️ Mic on");
+  }
+
+  // ── Analyze ──
+  async function analyze() {
+    if (!transcript.trim() || !resumeParsed) return;
+    setAnalyzing(true); setAnalyzeErr(null);
+    try {
+      const result = await API.factCheck(transcript, resumeParsed);
+      setAnalysis(result);
+      addLog(`🤖 Analysis: ${result.verdict} (${result.confidence}%)`);
+    } catch (err) { setAnalyzeErr(err.message); }
+    finally { setAnalyzing(false); }
+  }
+
+  function stopAll() {
+    stream?.getTracks().forEach(t => t.stop());
+    recognitionRef.current?.stop();
+    clearInterval(trackingRef.current);
+  }
+
+  const verdictColor = { consistent: "#00e5b0", inconsistent: "#ff4566", unverifiable: "#ffb020" };
+
+  // ── Setup screen ──
+  if (stage === "setup") return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ maxWidth: 500, width: "100%" }}>
+        <Btn variant="ghost" onClick={onBack} style={{ marginBottom: 20 }}>← Back</Btn>
+        <Card>
+          <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>👤 Candidate Setup</h2>
+          <p style={{ color: "#6b7299", fontSize: 14, marginBottom: 20 }}>Upload your resume first. AI will fact-check your spoken answers against it live.</p>
+          <Label>Your Name</Label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Jane Smith" style={{ width: "100%", background: "#161928", border: "1px solid #252a3d", borderRadius: 10, color: "#eceffe", fontSize: 14, padding: "10px 14px", marginBottom: 16, boxSizing: "border-box" }} />
+          <Label>Resume</Label>
+          {!resumeParsed ? (
+            <div>
+              <label style={{ display: "block", background: "#161928", border: "2px dashed #252a3d", borderRadius: 10, padding: 16, textAlign: "center", cursor: "pointer", marginBottom: 10 }}>
+                <input type="file" accept=".pdf,.docx,.txt" onChange={handleFile} style={{ display: "none" }} />
+                {resumeLoading ? <Spinner /> : <><div style={{ fontSize: 20, marginBottom: 4 }}>📎 Upload PDF / DOCX / TXT</div><div style={{ fontSize: 12, color: "#6b7299" }}>Click to browse</div></>}
+              </label>
+              <div style={{ textAlign: "center", color: "#6b7299", fontSize: 12, marginBottom: 8 }}>— or paste below —</div>
+              <textarea value={resumeText} onChange={e => setResumeText(e.target.value)} placeholder="Paste resume text here..." style={{ width: "100%", background: "#161928", border: "1px solid #252a3d", borderRadius: 10, color: "#eceffe", fontSize: 13, padding: "10px 14px", minHeight: 100, marginBottom: 8, boxSizing: "border-box", resize: "vertical" }} />
+              <Btn onClick={handlePaste} disabled={!resumeText.trim() || resumeLoading} style={{ width: "100%" }}>{resumeLoading ? <><Spinner /> Parsing...</> : "Parse Resume"}</Btn>
+            </div>
+          ) : (
+            <div style={{ background: "#161928", borderRadius: 10, padding: 14, marginBottom: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontWeight: 700 }}>{resumeParsed.name || "Resume loaded"}</span>
+                <Btn variant="ghost" onClick={() => { setResumeParsed(null); setResumeText(""); }} style={{ fontSize: 11, padding: "3px 8px" }}>✕ Clear</Btn>
+              </div>
+              <div>{(resumeParsed.skills || []).slice(0, 8).map((s, i) => <Tag key={i}>{s}</Tag>)}</div>
+              <div style={{ marginTop: 8, fontSize: 13, color: "#00e5b0", fontWeight: 600 }}>✅ Ready for AI analysis</div>
+            </div>
+          )}
+          <AlertBox type="info" style={{ marginTop: 14, marginBottom: 14 }}>📷 Camera will monitor eye movement for integrity tracking.</AlertBox>
+          <Btn onClick={startInterview} disabled={!name.trim() || !resumeParsed} style={{ width: "100%", marginTop: 4 }}>Start Interview Session</Btn>
+          {!resumeParsed && <div style={{ textAlign: "center", fontSize: 12, color: "#ff4566", marginTop: 8 }}>⚠️ Upload your resume to continue</div>}
+        </Card>
+      </div>
+    </div>
+  );
+
+  // ── Interview screen ──
+  return (
+    <div style={{ minHeight: "100vh", padding: 24 }}>
+      <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+          <div><h2 style={{ fontSize: 20, fontWeight: 800 }}>🎯 Candidate: {name}</h2><p style={{ color: "#6b7299", fontSize: 13 }}>Interview in progress</p></div>
+          <Btn variant="danger" onClick={() => { stopAll(); onBack(); }}>End & Exit</Btn>
+        </div>
+        {gazeAlert && <AlertBox type="warn" style={{ marginBottom: 16 }}>👀 {gazeAlert}</AlertBox>}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {/* Camera */}
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <Label style={{ margin: 0 }}>📷 Camera + Eye Tracking</Label>
+              <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: faceDetected ? "#00e5b015" : "#ff456615", color: faceDetected ? "#00e5b0" : "#ff4566", border: `1px solid ${faceDetected ? "#00e5b040" : "#ff456640"}` }}>
+                {faceDetected ? "Face ✓" : "No face"}
+              </span>
+            </div>
+            <div style={{ position: "relative", background: "#000", borderRadius: 8, overflow: "hidden", minHeight: 240 }}>
+              <video ref={videoRef} autoPlay muted playsInline style={{ width: "100%", display: "block" }} />
+              <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }} />
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7299", display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ width: 7, height: 7, borderRadius: "50%", background: stream ? "#00e5b0" : "#ff4566", flexShrink: 0 }} />
+              {eyeStatus}
+            </div>
+          </Card>
+          {/* Mic + transcript */}
+          <Card style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Label>🎙️ Microphone & Analysis</Label>
+            <Btn variant={listening ? "danger" : "success"} onClick={toggleMic} style={{ width: "100%" }}>
+              {listening ? "⏹ Stop Listening" : "▶ Start Speaking"}
+            </Btn>
+            <div style={{ background: "#161928", borderRadius: 8, padding: 12, minHeight: 120, fontSize: 14, lineHeight: 1.7, color: transcript ? "#eceffe" : "#6b7299", flex: 1 }}>
+              {transcript || "Your speech will appear here in real time..."}
+            </div>
+            {analyzeErr && <AlertBox type="danger">{analyzeErr}</AlertBox>}
+            <Btn onClick={analyze} disabled={!transcript.trim() || analyzing} style={{ width: "100%" }}>
+              {analyzing ? <><Spinner /> Analyzing...</> : "🤖 Analyze My Answer vs Resume"}
+            </Btn>
+          </Card>
+          {/* Analysis result */}
+          {analysis && (
+            <Card style={{ gridColumn: "1 / -1" }}>
+              <Label>🤖 Resume Cross-Check Result</Label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                    <div style={{ fontSize: 36 }}>{analysis.verdict === "consistent" ? "✅" : analysis.verdict === "inconsistent" ? "❌" : "⚠️"}</div>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 18, color: verdictColor[analysis.verdict] || "#6b7299" }}>{(analysis.verdict || "").toUpperCase()}</div>
+                      <div style={{ fontSize: 13, color: "#6b7299" }}>Confidence: {analysis.confidence}%</div>
+                    </div>
+                  </div>
+                  <ScoreBar label="Confidence" score={Math.round((analysis.confidence || 0) / 10)} />
+                  <p style={{ fontSize: 14, lineHeight: 1.7, marginTop: 10 }}>{analysis.explanation}</p>
+                </div>
+                <div>
+                  {analysis.resume_evidence && (
+                    <div style={{ background: "#161928", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+                      <Label>📄 Resume Evidence</Label>
+                      <p style={{ fontSize: 13, lineHeight: 1.6 }}>{analysis.resume_evidence}</p>
+                    </div>
+                  )}
+                  {(analysis.flags || []).map((f, i) => (
+                    <div key={i} style={{ fontSize: 13, padding: "7px 12px", background: "#ff456611", borderRadius: 6, marginBottom: 6, borderLeft: "3px solid #ff4566" }}>{f}</div>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          )}
+          {/* Integrity log */}
+          <Card style={{ gridColumn: "1 / -1" }}>
+            <Label>🛡️ Integrity Log</Label>
+            <div style={{ maxHeight: 160, overflowY: "auto" }}>
+              {log.length === 0
+                ? <p style={{ color: "#6b7299", fontSize: 13 }}>No events yet.</p>
+                : log.map((e, i) => (
+                  <div key={i} style={{ fontSize: 13, padding: "4px 0", borderBottom: "1px solid #252a3d", display: "flex", gap: 12 }}>
+                    <span style={{ color: "#6b7299", minWidth: 70, fontSize: 11 }}>{e.t}</span>
+                    <span>{e.msg}</span>
+                  </div>
+                ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCREEN: Interviewer Setup
+// ─────────────────────────────────────────────────────────────────────────────
+function ScreenSetup({ onReady, onBack }) {
+  const [step, setStep] = useState(1);
+  const [resumeText, setResumeText] = useState("");
+  const [resumeParsed, setResumeParsed] = useState(null);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [jdText, setJdText] = useState("");
+  const [jdParsed, setJdParsed] = useState(null);
+  const [jdLoading, setJdLoading] = useState(false);
+  const [candidateName, setCandidateName] = useState("");
+  const [interviewType, setInterviewType] = useState("technical");
+  const [launching, setLaunching] = useState(false);
+  const [launchErr, setLaunchErr] = useState(null);
+  const [useZoom, setUseZoom] = useState(false);
+  const [zoomMeeting, setZoomMeeting] = useState(null);
+  const [zoomLoading, setZoomLoading] = useState(false);
+  const [zoomErr, setZoomErr] = useState(null);
+
+  // ── Resume ──
+  async function handleResumeFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setResumeLoading(true);
+    try {
+      const { text } = await API.uploadResume(file);
+      const { parsed } = await API.parseResume(text);
+      setResumeParsed(parsed);
+      setResumeText(text);
+      if (parsed.name) setCandidateName(parsed.name);
+    } catch (err) { alert("Upload failed: " + err.message); }
+    finally { setResumeLoading(false); }
+  }
+
+  async function handleResumePaste() {
+    if (!resumeText.trim()) return;
+    setResumeLoading(true);
+    try {
+      const { parsed } = await API.parseResume(resumeText);
+      setResumeParsed(parsed);
+      if (parsed.name) setCandidateName(parsed.name);
+    } catch (err) { alert("Parse failed: " + err.message); }
+    finally { setResumeLoading(false); }
+  }
+
+  // ── JD ──
+  async function handleJD() {
+    if (!jdText.trim()) return;
+    setJdLoading(true);
+    try {
+      const { parsed } = await API.parseJD(jdText);
+      setJdParsed(parsed);
+    } catch (err) { alert("JD parse failed: " + err.message); }
+    finally { setJdLoading(false); }
+  }
+
+  // ── Zoom ──
+  async function handleCreateZoom() {
+    setZoomLoading(true); setZoomErr(null);
+    try {
+      const m = await API.createZoom({ candidate_name: candidateName });
+      setZoomMeeting(m);
+    } catch (err) { setZoomErr(err.message); }
+    finally { setZoomLoading(false); }
+  }
+
+  // ── Launch ──
+  async function handleLaunch() {
+    if (!resumeParsed || !candidateName.trim()) return;
+    setLaunching(true); setLaunchErr(null);
+    try {
+      const data = await API.startSession({
+        candidate_name: candidateName,
+        interview_type: interviewType,
+        resume_parsed: resumeParsed,
+        jd_parsed: jdParsed || null,
+      });
+      onReady({
+        session_id: data.session_id,
+        candidate_name: data.candidate_name,
+        resumeParsed,
+        jdParsed,
+        interviewType,
+        zoomMeeting: zoomMeeting || null,
+      });
+    } catch (err) { setLaunchErr(err.message); }
+    finally { setLaunching(false); }
+  }
+
+  const inputStyle = { width: "100%", background: "#161928", border: "1px solid #252a3d", borderRadius: 10, color: "#eceffe", fontSize: 14, padding: "10px 14px", boxSizing: "border-box" };
+  const taStyle = { ...inputStyle, minHeight: 130, resize: "vertical" };
+
+  return (
+    <div style={{ minHeight: "100vh", padding: 24 }}>
+      <div style={{ maxWidth: 700, margin: "0 auto" }}>
+        <Btn variant="ghost" onClick={onBack} style={{ marginBottom: 20 }}>← Back</Btn>
+        <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 4 }}>🎙️ Interviewer Setup</h2>
+        <p style={{ color: "#6b7299", fontSize: 14, marginBottom: 28 }}>Configure the interview to get real-time AI analysis.</p>
+
+        {/* Step tabs */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 28 }}>
+          {["1. Resume", "2. Job Description", "3. Launch"].map((s, i) => (
+            <div key={i} onClick={() => { if (i + 1 < step) setStep(i + 1); }}
+              style={{ flex: 1, padding: "9px 0", textAlign: "center", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: i + 1 < step ? "pointer" : "default", background: step === i + 1 ? "#7c6dff" : step > i + 1 ? "#00e5b0" : "#161928", color: step > i + 1 ? "#000" : "#eceffe" }}>
+              {step > i + 1 ? "✓ " : ""}{s}
+            </div>
+          ))}
+        </div>
+
+        <Card>
+          {/* STEP 1 */}
+          {step === 1 && (
+            <div>
+              <h3 style={{ marginBottom: 16, fontSize: 16, fontWeight: 700 }}>📄 Candidate Resume</h3>
+              {!resumeParsed ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <label style={{ display: "block", background: "#161928", border: "2px dashed #252a3d", borderRadius: 10, padding: 20, textAlign: "center", cursor: "pointer" }}>
+                    <input type="file" accept=".pdf,.docx,.txt" onChange={handleResumeFile} style={{ display: "none" }} />
+                    {resumeLoading ? <Spinner /> : <><div style={{ fontSize: 20, marginBottom: 6 }}>📎 Upload PDF / DOCX / TXT</div><div style={{ fontSize: 12, color: "#6b7299" }}>Click to browse</div></>}
+                  </label>
+                  <div style={{ textAlign: "center", color: "#6b7299", fontSize: 12 }}>— or paste below —</div>
+                  <textarea value={resumeText} onChange={e => setResumeText(e.target.value)} placeholder="Paste resume text..." style={taStyle} />
+                  <Btn onClick={handleResumePaste} disabled={!resumeText.trim() || resumeLoading} style={{ width: "100%" }}>
+                    {resumeLoading ? <><Spinner /> Parsing...</> : "Parse Resume"}
+                  </Btn>
+                </div>
+              ) : (
+                <div style={{ background: "#161928", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                    <div><div style={{ fontWeight: 700, fontSize: 16 }}>{resumeParsed.name || "Resume loaded"}</div><div style={{ color: "#6b7299", fontSize: 13 }}>{resumeParsed.email}</div></div>
+                    <Btn variant="ghost" onClick={() => { setResumeParsed(null); setResumeText(""); }} style={{ fontSize: 11, padding: "3px 8px" }}>✕</Btn>
+                  </div>
+                  <div>{(resumeParsed.skills || []).slice(0, 10).map((s, i) => <Tag key={i}>{s}</Tag>)}</div>
+                  <div style={{ marginTop: 10, fontSize: 13, color: "#00e5b0", fontWeight: 600 }}>✅ Resume parsed — {resumeParsed.skills?.length || 0} skills</div>
+                </div>
+              )}
+              {resumeParsed && (
+                <Btn onClick={() => setStep(2)} style={{ width: "100%", marginTop: 8 }}>Next: Job Description →</Btn>
+              )}
+            </div>
+          )}
+
+          {/* STEP 2 */}
+          {step === 2 && (
+            <div>
+              <h3 style={{ marginBottom: 16, fontSize: 16, fontWeight: 700 }}>📋 Job Description</h3>
+              {!jdParsed ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <textarea value={jdText} onChange={e => setJdText(e.target.value)} placeholder="Paste the job description here..." style={taStyle} />
+                  <Btn onClick={handleJD} disabled={!jdText.trim() || jdLoading} style={{ width: "100%" }}>
+                    {jdLoading ? <><Spinner /> Parsing...</> : "Parse JD"}
+                  </Btn>
+                  <Btn variant="ghost" onClick={() => setStep(3)} style={{ width: "100%" }}>Skip — no JD</Btn>
+                </div>
+              ) : (
+                <div style={{ background: "#161928", borderRadius: 10, padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                    <div><div style={{ fontWeight: 700 }}>{jdParsed.role || "Role"}</div><div style={{ fontSize: 13, color: "#6b7299" }}>{jdParsed.seniority}</div></div>
+                    <Btn variant="ghost" onClick={() => { setJdParsed(null); }} style={{ fontSize: 11, padding: "3px 8px" }}>✕</Btn>
+                  </div>
+                  <div>{(jdParsed.competencies || []).map((c, i) => <Tag key={i} color="#00e5b0">{c}</Tag>)}</div>
+                  <div style={{ marginTop: 10, fontSize: 13, color: "#00e5b0", fontWeight: 600 }}>✅ {jdParsed.competencies?.length || 0} competencies mapped</div>
+                  <Btn onClick={() => setStep(3)} style={{ width: "100%", marginTop: 14 }}>Next: Launch →</Btn>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* STEP 3 */}
+          {step === 3 && (
+            <div>
+              <h3 style={{ marginBottom: 20, fontSize: 16, fontWeight: 700 }}>⚙️ Configuration</h3>
+
+              <Label>Candidate Name</Label>
+              <input value={candidateName} onChange={e => setCandidateName(e.target.value)} placeholder="e.g. Jane Smith" style={{ ...inputStyle, marginBottom: 16 }} />
+
+              <Label>Interview Type</Label>
+              <div style={{ display: "flex", gap: 10, marginBottom: 24, flexWrap: "wrap" }}>
+                {["technical", "behavioral", "leadership", "mixed"].map(t => (
+                  <button key={t} onClick={() => setInterviewType(t)} style={{ background: interviewType === t ? "#7c6dff" : "#161928", border: `1px solid ${interviewType === t ? "#7c6dff" : "#252a3d"}`, borderRadius: 10, padding: "8px 18px", fontSize: 13, fontWeight: 600, color: interviewType === t ? "#fff" : "#eceffe", cursor: "pointer", textTransform: "capitalize" }}>{t}</button>
+                ))}
+              </div>
+
+              {/* Zoom */}
+              <div style={{ background: "#161928", borderRadius: 10, padding: 16, marginBottom: 20, border: "1px solid #252a3d" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: useZoom ? 14 : 0 }}>
+                  <div><div style={{ fontWeight: 700 }}>📹 Zoom Meeting (Optional)</div><div style={{ fontSize: 12, color: "#6b7299" }}>Embed Zoom inside the interview room</div></div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                    <input type="checkbox" checked={useZoom} onChange={e => setUseZoom(e.target.checked)} />Enable
+                  </label>
+                </div>
+                {useZoom && !zoomMeeting && (
+                  <div>
+                    <Btn onClick={handleCreateZoom} disabled={zoomLoading || !candidateName.trim()} style={{ width: "100%", marginBottom: 8 }}>
+                      {zoomLoading ? <><Spinner /> Creating...</> : "🎥 Create Zoom Meeting"}
+                    </Btn>
+                    {zoomErr && <AlertBox type="warn">{zoomErr} — Set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET env vars.</AlertBox>}
+                  </div>
+                )}
+                {useZoom && zoomMeeting && (
+                  <div style={{ background: "#0f1120", borderRadius: 8, padding: 12 }}>
+                    <div style={{ color: "#00e5b0", fontWeight: 700, marginBottom: 8, fontSize: 13 }}>✅ Zoom Meeting Created</div>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}><strong>ID:</strong> {zoomMeeting.meeting_id}</div>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Password:</strong> {zoomMeeting.password}</div>
+                    <div style={{ fontSize: 13 }}><strong>Candidate Link:</strong> <a href={zoomMeeting.join_url} target="_blank" rel="noreferrer" style={{ color: "#7c6dff" }}>{zoomMeeting.join_url}</a></div>
+                  </div>
+                )}
+              </div>
+
+              {/* Summary */}
+              <div style={{ background: "#161928", borderRadius: 10, padding: 14, fontSize: 13, marginBottom: 20 }}>
+                <div style={{ marginBottom: 4 }}>👤 <strong>Candidate:</strong> {candidateName || "—"}</div>
+                <div style={{ marginBottom: 4 }}>📄 <strong>Resume:</strong> {resumeParsed ? `${resumeParsed.name || "Loaded"} · ${resumeParsed.skills?.length || 0} skills` : "Not loaded"}</div>
+                <div style={{ marginBottom: 4 }}>📋 <strong>JD:</strong> {jdParsed ? `${jdParsed.role || "Loaded"} · ${jdParsed.competencies?.length || 0} competencies` : "Skipped"}</div>
+                <div style={{ marginBottom: 4 }}>🎯 <strong>Type:</strong> {interviewType}</div>
+                <div>📹 <strong>Zoom:</strong> {zoomMeeting ? `Meeting ${zoomMeeting.meeting_id}` : useZoom ? "Not created yet" : "Disabled"}</div>
+              </div>
+
+              {launchErr && <AlertBox type="danger" style={{ marginBottom: 14 }}>{launchErr}</AlertBox>}
+              <Btn variant="success" onClick={handleLaunch} disabled={!resumeParsed || !candidateName.trim() || launching} style={{ width: "100%", fontSize: 16, padding: 14 }}>
+                {launching ? <><Spinner /> Starting...</> : "🚀 Launch Interview"}
+              </Btn>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCREEN: Interview Room
+// ─────────────────────────────────────────────────────────────────────────────
+function ScreenInterview({ session, onReport, onBack }) {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [turns, setTurns] = useState([]);
+  const [liveAnalysis, setLiveAnalysis] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [reporting, setReporting] = useState(false);
+  const [err, setErr] = useState(null);
+  const [listening, setListening] = useState(false);
+  const [flags, setFlags] = useState([]);
+  const [zoomJoined, setZoomJoined] = useState(false);
+  const [zoomLoading, setZoomLoading] = useState(false);
+  const [zoomErr, setZoomErr] = useState(null);
+  const recRef = useRef(null);
+  const zoomRef = useRef(null);
+
+  const FLAG_OPTIONS = ["Hesitation", "Reading notes", "Looking away", "Vague answer", "Inconsistent tone"];
+
+  function toggleFlag(f) {
+    setFlags(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]);
+  }
+
+  function toggleMic() {
+    if (listening) { recRef.current?.stop(); setListening(false); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const r = new SR();
+    r.continuous = true; r.interimResults = true; r.lang = "en-US";
+    r.onresult = e => { let t = ""; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; setAnswer(t); };
+    r.onend = () => setListening(false);
+    r.start(); recRef.current = r; setListening(true);
+  }
+
+  async function submitAnswer() {
+    if (!question.trim() || !answer.trim()) return;
+    setLoading(true); setErr(null);
+    try {
+      const { turn } = await API.analyzeChunk({ session_id: session.session_id, question, answer, integrity_flags: flags });
+      setTurns(prev => [turn, ...prev]);
+      setLiveAnalysis(turn.analysis);
+      setQuestion(""); setAnswer(""); setFlags([]);
+      recRef.current?.stop(); setListening(false);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  async function endInterview() {
+    setReporting(true);
+    try {
+      const { report } = await API.genReport(session.session_id);
+      onReport(report);
+    } catch (e) { setErr(e.message); setReporting(false); }
+  }
+
+  async function joinZoom() {
+    if (!session.zoomMeeting) return;
+    setZoomLoading(true); setZoomErr(null);
+    try {
+      const { signature, sdk_key } = await API.zoomSig(session.zoomMeeting.meeting_id, 1);
+      const { ZoomMtgEmbedded } = await import("@zoom/meetingsdk/embedded");
+      const client = ZoomMtgEmbedded.createClient();
+      client.init({ zoomAppRoot: zoomRef.current, language: "en-US" });
+      await client.join({ sdkKey: sdk_key, signature, meetingNumber: session.zoomMeeting.meeting_id, password: session.zoomMeeting.password, userName: "Interviewer" });
+      setZoomJoined(true);
+    } catch (e) { setZoomErr("Zoom join failed: " + e.message); }
+    finally { setZoomLoading(false); }
+  }
+
+  const avg = turns.length ? Math.round(turns.reduce((s, t) => s + (t.analysis?.competency_score || 0), 0) / turns.length * 10) / 10 : null;
+  const taStyle = { width: "100%", background: "#161928", border: "1px solid #252a3d", borderRadius: 10, color: "#eceffe", fontSize: 14, padding: "10px 14px", boxSizing: "border-box", resize: "vertical" };
+
+  return (
+    <div style={{ minHeight: "100vh", padding: 24 }}>
+      <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+          <div>
+            <h2 style={{ fontSize: 20, fontWeight: 800 }}>🎙️ Live Interview — {session.candidate_name}</h2>
+            <p style={{ color: "#6b7299", fontSize: 13 }}>{session.interviewType} · {turns.length} Q{turns.length !== 1 ? "s" : ""}{avg !== null ? ` · Avg ${avg}/10` : ""}</p>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Btn variant="ghost" onClick={onBack}>← Exit</Btn>
+            <Btn variant="danger" onClick={endInterview} disabled={turns.length === 0 || reporting}>
+              {reporting ? <><Spinner /> Generating...</> : "📊 End & Report"}
+            </Btn>
+          </div>
+        </div>
+
+        {/* Zoom panel */}
+        {session.zoomMeeting && (
+          <Card style={{ marginBottom: 20, border: "1px solid #7c6dff40" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>📹 Zoom — {session.zoomMeeting.meeting_id}</div>
+                <div style={{ fontSize: 12, color: "#6b7299" }}>Candidate link: <a href={session.zoomMeeting.join_url} target="_blank" rel="noreferrer" style={{ color: "#7c6dff" }}>{session.zoomMeeting.join_url}</a></div>
+              </div>
+              {!zoomJoined && <Btn onClick={joinZoom} disabled={zoomLoading}>{zoomLoading ? <><Spinner /> Joining...</> : "Join Meeting"}</Btn>}
+            </div>
+            {zoomErr && <AlertBox type="warn" style={{ marginTop: 10 }}>{zoomErr}</AlertBox>}
+            <div ref={zoomRef} style={{ width: "100%", height: zoomJoined ? 480 : 0, overflow: "hidden", borderRadius: 8, marginTop: zoomJoined ? 12 : 0 }} />
+          </Card>
+        )}
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 20, alignItems: "start" }}>
+          {/* Left: input */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <Card>
+              <Label>Question Asked</Label>
+              <textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="Type the question you asked the candidate..." style={{ ...taStyle, minHeight: 72, marginBottom: 14 }} />
+
+              <Label>
+                Candidate Answer
+                <button onClick={toggleMic} style={{ marginLeft: 10, fontSize: 11, padding: "2px 10px", background: listening ? "#ff456620" : "#161928", border: `1px solid ${listening ? "#ff4566" : "#252a3d"}`, borderRadius: 20, color: listening ? "#ff4566" : "#6b7299", cursor: "pointer" }}>
+                  {listening ? "⏹ Stop mic" : "🎙️ Use mic"}
+                </button>
+              </Label>
+              <textarea value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Type or dictate the candidate's answer..." style={{ ...taStyle, minHeight: 110, marginBottom: 14 }} />
+
+              <Label>Integrity Flags</Label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                {FLAG_OPTIONS.map(f => (
+                  <button key={f} onClick={() => toggleFlag(f)} style={{ fontSize: 12, padding: "5px 12px", borderRadius: 20, background: flags.includes(f) ? "#ffb02015" : "#161928", border: `1px solid ${flags.includes(f) ? "#ffb020" : "#252a3d"}`, color: flags.includes(f) ? "#ffb020" : "#6b7299", cursor: "pointer" }}>{f}</button>
+                ))}
+              </div>
+
+              {err && <AlertBox type="danger" style={{ marginBottom: 12 }}>{err}</AlertBox>}
+              <Btn onClick={submitAnswer} disabled={!question.trim() || !answer.trim() || loading} style={{ width: "100%" }}>
+                {loading ? <><Spinner /> Analyzing...</> : "⚡ Analyze Answer"}
+              </Btn>
+            </Card>
+
+            {turns.map((t, i) => <TurnCard key={i} turn={t} n={turns.length - i} />)}
+          </div>
+
+          {/* Right: analysis + suggestions */}
+          <div style={{ position: "sticky", top: 24 }}>
+            {liveAnalysis
+              ? <AnalysisPanel analysis={liveAnalysis} onUseQ={q => setQuestion(q)} />
+              : <Card style={{ textAlign: "center", padding: 32, color: "#6b7299" }}><div style={{ fontSize: 32, marginBottom: 10 }}>🤖</div><p style={{ fontSize: 14 }}>Submit an answer to see live AI analysis here.</p></Card>}
+
+            {session.jdParsed?.competencies?.length > 0 && (
+              <Card style={{ marginTop: 16 }}>
+                <Label>Target Competencies</Label>
+                <div>{session.jdParsed.competencies.map((c, i) => <Tag key={i} color="#00e5b0">{c}</Tag>)}</div>
+              </Card>
+            )}
+
+            {session.jdParsed?.suggested_questions?.length > 0 && (
+              <Card style={{ marginTop: 16 }}>
+                <Label>Suggested Questions</Label>
+                {session.jdParsed.suggested_questions.slice(0, 4).map((q, i) => (
+                  <div key={i} onClick={() => setQuestion(q)} style={{ fontSize: 13, padding: "8px 10px", marginBottom: 6, background: "#161928", borderRadius: 8, cursor: "pointer", border: "1px solid transparent", transition: "border-color .15s" }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = "#7c6dff"}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = "transparent"}>{q}</div>
+                ))}
+              </Card>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnalysisPanel({ analysis, onUseQ }) {
+  return (
+    <Card>
+      <Label>⚡ Live Analysis</Label>
+      <ScoreBar label="Relevance" score={analysis.relevance_score || 0} />
+      <ScoreBar label="Competency" score={analysis.competency_score || 0} />
+      {analysis.summary && <p style={{ fontSize: 13, color: "#6b7299", margin: "12px 0", lineHeight: 1.6 }}>{analysis.summary}</p>}
+      {analysis.contradictions?.length > 0 && (<><Label style={{ color: "#ff4566" }}>⚠️ Contradictions</Label>{analysis.contradictions.map((c, i) => <div key={i} style={{ fontSize: 13, padding: "6px 10px", background: "#ff456611", borderRadius: 6, marginBottom: 4, borderLeft: "3px solid #ff4566" }}>{c}</div>)}</>)}
+      {analysis.follow_up_questions?.length > 0 && (<><Label style={{ color: "#7c6dff", marginTop: 10 }}>💬 Follow-up Questions</Label>{analysis.follow_up_questions.map((q, i) => <div key={i} onClick={() => onUseQ(q)} style={{ fontSize: 13, padding: "6px 10px", background: "#7c6dff11", borderRadius: 6, marginBottom: 4, borderLeft: "3px solid #7c6dff", cursor: "pointer" }}>{q}</div>)}</>)}
+      {analysis.concerns?.length > 0 && (<><Label style={{ color: "#ffb020", marginTop: 10 }}>⚡ Concerns</Label>{analysis.concerns.map((c, i) => <div key={i} style={{ fontSize: 13, padding: "6px 10px", background: "#ffb02011", borderRadius: 6, marginBottom: 4, borderLeft: "3px solid #ffb020" }}>{c}</div>)}</>)}
+      {analysis.strengths?.length > 0 && (<><Label style={{ color: "#00e5b0", marginTop: 10 }}>✅ Strengths</Label>{analysis.strengths.map((s, i) => <div key={i} style={{ fontSize: 13, padding: "6px 10px", background: "#00e5b011", borderRadius: 6, marginBottom: 4, borderLeft: "3px solid #00e5b0" }}>{s}</div>)}</>)}
+    </Card>
+  );
+}
+
+function TurnCard({ turn, n }) {
+  const [open, setOpen] = useState(false);
+  const score = turn.analysis?.competency_score || 0;
+  const col = score >= 7 ? "#00e5b0" : score >= 4 ? "#ffb020" : "#ff4566";
+  return (
+    <Card style={{ cursor: "pointer" }} onClick={() => setOpen(o => !o)}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Q{n}. {turn.question.slice(0, 60)}{turn.question.length > 60 ? "…" : ""}</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {turn.analysis?.contradictions?.length > 0 && <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: "#ff456615", color: "#ff4566", border: "1px solid #ff456640" }}>⚠️ {turn.analysis.contradictions.length}</span>}
+          <span style={{ fontWeight: 700, color: col }}>{score}/10</span>
+          <span style={{ color: "#6b7299" }}>{open ? "▲" : "▼"}</span>
+        </div>
+      </div>
+      {open && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #252a3d" }}>
+          <p style={{ fontSize: 13, color: "#6b7299", marginBottom: 8 }}><strong>Answer:</strong> {turn.answer.slice(0, 200)}</p>
+          {turn.analysis?.summary && <p style={{ fontSize: 13 }}>{turn.analysis.summary}</p>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCREEN: Report
+// ─────────────────────────────────────────────────────────────────────────────
+function ScreenReport({ report, onBack }) {
+  const recColor = { "Strong Hire": "#00e5b0", "Hire": "#7c6dff", "Maybe": "#ffb020", "No Hire": "#ff4566" }[report.recommendation] || "#6b7299";
+  const recIcon = { "Strong Hire": "🚀", "Hire": "✅", "Maybe": "🤔", "No Hire": "❌" }[report.recommendation] || "📊";
+  return (
+    <div style={{ minHeight: "100vh", padding: 24 }}>
+      <div style={{ maxWidth: 860, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
+          <div><h2 style={{ fontSize: 24, fontWeight: 800 }}>📊 Post-Interview Report</h2><p style={{ color: "#6b7299" }}>AI-generated evaluation</p></div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Btn variant="ghost" onClick={() => window.print()}>🖨️ Print</Btn>
+            <Btn onClick={onBack}>← New Interview</Btn>
+          </div>
+        </div>
+
+        <Card style={{ textAlign: "center", padding: 36, marginBottom: 20, border: `2px solid ${recColor}30` }}>
+          <div style={{ fontSize: 52, marginBottom: 10 }}>{recIcon}</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: recColor, marginBottom: 8 }}>{report.recommendation}</div>
+          <div style={{ fontSize: 40, fontWeight: 900, marginBottom: 12 }}>{report.overall_score}/10</div>
+          <p style={{ color: "#6b7299", maxWidth: 560, margin: "0 auto", fontSize: 14, lineHeight: 1.7 }}>{report.executive_summary}</p>
+        </Card>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          {report.competency_scores && Object.keys(report.competency_scores).length > 0 && (
+            <Card>
+              <Label>🎯 Competency Scores</Label>
+              {Object.entries(report.competency_scores).map(([k, v]) => <ScoreBar key={k} label={k} score={v} />)}
+            </Card>
+          )}
+          {report.strengths?.length > 0 && (
+            <Card>
+              <Label style={{ color: "#00e5b0" }}>✅ Strengths</Label>
+              {report.strengths.map((s, i) => <div key={i} style={{ fontSize: 14, padding: "7px 0", borderBottom: "1px solid #252a3d", display: "flex", gap: 8 }}><span style={{ color: "#00e5b0" }}>▸</span>{s}</div>)}
+            </Card>
+          )}
+        </div>
+
+        {(report.concerns?.length > 0 || report.contradictions_detected?.length > 0) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+            {report.concerns?.length > 0 && (
+              <Card>
+                <Label style={{ color: "#ffb020" }}>⚠️ Concerns</Label>
+                {report.concerns.map((c, i) => <div key={i} style={{ fontSize: 14, padding: "7px 0", borderBottom: "1px solid #252a3d", display: "flex", gap: 8 }}><span style={{ color: "#ffb020" }}>▸</span>{c}</div>)}
+              </Card>
+            )}
+            {report.contradictions_detected?.length > 0 && (
+              <Card>
+                <Label style={{ color: "#ff4566" }}>🚨 Contradictions</Label>
+                {report.contradictions_detected.map((c, i) => <div key={i} style={{ fontSize: 14, padding: "7px 0", borderBottom: "1px solid #252a3d", display: "flex", gap: 8 }}><span style={{ color: "#ff4566" }}>▸</span>{c}</div>)}
+              </Card>
+            )}
+          </div>
+        )}
+
+        {report.suggested_next_steps?.length > 0 && (
+          <Card>
+            <Label>📋 Next Steps</Label>
+            {report.suggested_next_steps.map((s, i) => <div key={i} style={{ fontSize: 14, padding: "8px 0", borderBottom: "1px solid #252a3d", display: "flex", gap: 8 }}><span style={{ color: "#7c6dff", minWidth: 20 }}>{i + 1}.</span>{s}</div>)}
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROOT
+// ─────────────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [screen, setScreen] = useState("role");
+  const [session, setSession] = useState(null);
+  const [report, setReport] = useState(null);
+  const [role, setRole] = useState(null);
+
+  function selectRole(r) { setRole(r); setScreen(r === "candidate" ? "candidate" : "setup"); }
+  function reset() { setScreen("role"); setSession(null); setReport(null); setRole(null); }
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#08090f", color: "#eceffe", fontFamily: "'DM Sans',system-ui,sans-serif" }}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}} *{box-sizing:border-box;margin:0;padding:0} ::-webkit-scrollbar{width:5px} ::-webkit-scrollbar-thumb{background:#252a3d;border-radius:3px}`}</style>
+      {screen === "role"      && <ScreenRole onSelect={selectRole} />}
+      {screen === "candidate" && <ScreenCandidate onBack={reset} />}
+      {screen === "setup"     && <ScreenSetup onReady={s => { setSession(s); setScreen("interview"); }} onBack={reset} />}
+      {screen === "interview" && session && <ScreenInterview session={session} onReport={r => { setReport(r); setScreen("report"); }} onBack={reset} />}
+      {screen === "report"    && report  && <ScreenReport report={report} onBack={reset} />}
+    </div>
+  );
+}

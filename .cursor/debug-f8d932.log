@@ -1,0 +1,4 @@
+{"sessionId":"f8d932","location":"InterviewRoom/index.jsx:joinZoom:entry","message":"joinZoom started","data":{"meeting_id":"82159398602","hasPassword":true},"timestamp":1772921196934,"hypothesisId":"H1"}
+{"sessionId":"f8d932","location":"InterviewRoom/index.jsx:joinZoom:afterSignature","message":"getZoomSignature ok","data":{"hasSignature":true,"hasSdkKey":true},"timestamp":1772921196942,"hypothesisId":"H1"}
+{"sessionId":"f8d932","location":"InterviewRoom/index.jsx:joinZoom:noZoomMtg","message":"ZoomMtgEmbedded missing","data":{},"timestamp":1772921196942,"hypothesisId":"H2"}
+{"sessionId":"f8d932","location":"InterviewRoom/index.jsx:joinZoom:catch","message":"joinZoom error","data":{"errMessage":"Zoom CDN not loaded. Check index.html script tags.","errName":"Error"},"timestamp":1772921196943,"hypothesisId":"H1,H4,H5"}
